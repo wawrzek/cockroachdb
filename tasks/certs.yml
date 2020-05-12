@@ -1,0 +1,143 @@
+---
+- name: Create dir for Ansible facts
+  file:
+    state: directory
+    owner: root
+    group: root
+    path: "{{ cockroachdb_facts_dir }}"
+    recurse: yes
+- name: Create file with the fact
+  template:
+    src: cockroachdb.fact.j2
+    dest: "{{ cockroachdb_facts_file }}"
+    owner: root
+    group: root
+    force: "{{ cockroachdb_facts_refresh }}"
+    mode: 0644
+- name: Re-read facts after adding custom fact
+  setup: filter=ansible_local
+- name: Create dirs for certs and keys
+  file:
+    state: directory
+    owner: cockroach
+    group: cockroach
+    mode: 0755
+    path: "{{ item }}"
+  loop:
+    - "{{ cockroachdb_path_ca_safe }}"
+    - "{{ cockroachdb_path_ca_certs }}"
+- block: # Run once CA creation
+  - name: check if CA key exisist
+    stat:
+      path: "{{ cockroachdb_path_ca_safe }}/ca.key"
+    register: ca_key
+  - name: Create CA key and cert
+    command: >
+      {{ cockroachdb_path }}/bin/cockroach cert create-ca \
+      --certs-dir {{ cockroachdb_path_ca_certs }} \
+      --ca-key {{ cockroachdb_path_ca_safe }}/ca.key
+    when: not ca_key.stat.exists|bool
+  - name: Fetch ca key and cert to distribute
+    fetch:
+      src: "{{ item.0 }}/{{ item.1 }}"
+      dest: "{{ cockroachdb_path_local }}/"
+      flat: yes
+    loop:
+      - ["{{ cockroachdb_path_ca_safe }}", ca.key]
+      - ["{{ cockroachdb_path_ca_certs }}", ca.crt]
+    when: not ansible_local.cockroachdb.pki.ca|bool
+  run_once: true
+- name: Copy ca key and cert to all cockroach nodes
+  copy:
+    src: "{{ cockroachdb_path_local }}/{{ item.1 }}"
+    dest: "{{ item.0 }}/{{ item.1 }}"
+    owner: root
+    group: cockroach
+    mode: "{{ item.2 }}"
+  loop:
+    - ["{{ cockroachdb_path_ca_safe }}", ca.key, "0440"]
+    - ["{{ cockroachdb_path_ca_certs }}", ca.crt, "0644"]
+  when: not ansible_local.cockroachdb.pki.ca|bool
+- name: Set the fact for CA
+  lineinfile:
+    path: "{{ cockroachdb_facts_file }}"
+    regexp: "^ca="
+    line: "ca=yes"
+  when: not ansible_local.cockroachdb.pki.ca|bool
+- name: check if node key exisist
+  stat:
+    path: "{{ cockroachdb_path_ca_certs }}/node.key"
+  register: node_key
+- name: Create node keys and certs
+  command: >
+    {{ cockroachdb_path }}/bin/cockroach cert create-node \
+    {{ ansible_default_ipv4.address }} \
+    {{ ansible_hostname }} \
+    localhost \
+    127.0.0.1 \
+    --certs-dir {{ cockroachdb_path_ca_certs }} \
+    --ca-key {{ cockroachdb_path_ca_safe }}/ca.key
+  become: true
+  become_user: cockroach
+  when: not node_key.stat.exists|bool
+- name: Set the fact for node key
+  lineinfile:
+    path: "{{ cockroachdb_facts_file }}"
+    regexp: "^client="
+    line: "client=yes"
+  when: not ansible_local.cockroachdb.pki.node|bool
+- name: check if client key exisist
+  stat:
+    path: "{{ cockroachdb_path_ca_certs }}/client.root.key"
+  register: client_key
+- name: Create client certificate and key
+  command: >
+    {{ cockroachdb_path }}/bin/cockroach cert create-client root \
+    --certs-dir {{ cockroachdb_path_ca_certs }} \
+    --ca-key {{ cockroachdb_path_ca_safe }}/ca.key
+  become: true
+  become_user: cockroach
+  when: not client_key.stat.exists|bool
+- name: Set the fact for client key
+  lineinfile:
+    path: "{{ cockroachdb_facts_file }}"
+    regexp: "^client="
+    line: "client=yes"
+  when: not ansible_local.cockroachdb.pki.client|bool
+- name: check if corda key exisist
+  stat:
+    path: "{{ cockroachdb_path_ca_certs }}/client.corda.key.pk8"
+  register: corda_key
+- name: Create corda certificate and key
+  command: >
+    {{ cockroachdb_path }}/bin/cockroach cert create-client corda \
+    --certs-dir {{ cockroachdb_path_ca_certs }} \
+    --ca-key {{ cockroachdb_path_ca_safe }}/ca.key \
+    --also-generate-pkcs8-key
+  become: true
+  become_user: cockroach
+  when: not corda_key.stat.exists|bool
+- name: Set the fact for Corda key
+  lineinfile:
+    path: "{{ cockroachdb_facts_file }}"
+    regexp: "^corda="
+    line: "corda=yes"
+  when: not ansible_local.cockroachdb.pki.corda|bool
+- name: Ensure client
+  file:
+    path: "{{ cockroachdb_path_ca_certs }}/client.corda.key.pk8"
+    mode: "0644"
+- name: Start CockrachDB
+  systemd:
+    name: cockroach
+    state: restarted
+    enabled: true
+    daemon_reload: true
+- name: Initilize CockroachDB
+  command: >
+    {{ cockroachdb_path }}/bin/cockroach init \
+    --certs-dir {{ cockroachdb_path_ca_certs }} \
+    --host=localhost
+  run_once: true
+  notify:
+    - restart CockroachDB
