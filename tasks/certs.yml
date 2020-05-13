@@ -133,7 +133,6 @@
     dest: "{{ cockroachdb_path_local }}/"
     flat: yes
   loop:
-    - ["{{ cockroachdb_path_ca_certs }}", client.corda.key]
     - ["{{ cockroachdb_path_ca_certs }}", client.corda.crt]
     - ["{{ cockroachdb_path_ca_certs }}", client.corda.key.pk8]
 - name: Start CockrachDB
@@ -148,5 +147,6 @@
     --certs-dir {{ cockroachdb_path_ca_certs }} \
     --host=localhost
   run_once: true
+  ignore_errors: yes # It failes when rerun so skip it
   notify:
     - restart CockroachDB
