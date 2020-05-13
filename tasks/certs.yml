@@ -127,6 +127,15 @@
   file:
     path: "{{ cockroachdb_path_ca_certs }}/client.corda.key.pk8"
     mode: "0644"
+- name: Fetch ca key and cert to distribute
+  fetch:
+    src: "{{ item.0 }}/{{ item.1 }}"
+    dest: "{{ cockroachdb_path_local }}/"
+    flat: yes
+  loop:
+    - ["{{ cockroachdb_path_ca_certs }}", client.corda.key]
+    - ["{{ cockroachdb_path_ca_certs }}", client.corda.crt]
+    - ["{{ cockroachdb_path_ca_certs }}", client.corda.key.pk8]
 - name: Start CockrachDB
   systemd:
     name: cockroach
